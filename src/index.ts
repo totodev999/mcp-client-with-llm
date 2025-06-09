@@ -1,6 +1,16 @@
 import express, { NextFunction, Request, Response } from 'express';
 import dotenv from 'dotenv';
-import { CoreMessage, generateText, LanguageModelV1, ToolSet } from 'ai';
+import {
+  CoreAssistantMessage,
+  CoreMessage,
+  CoreSystemMessage,
+  CoreToolMessage,
+  CoreUserMessage,
+  generateText,
+  LanguageModelV1,
+  ToolSet,
+  UIMessage,
+} from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import {
   createGoogleGenerativeAI,
@@ -8,19 +18,21 @@ import {
 } from '@ai-sdk/google';
 import { experimental_createMCPClient as createMcpClient } from 'ai';
 import { getConversation, upsertConversation } from './db';
+import multer from 'multer';
 
 dotenv.config();
 const PORT = process.env.PORT;
 const llmModel = process.env.LLM_MODEL;
 const apiKey = process.env.API_KEY;
-const systemPrompt = process.env.SYSTEM_PROMPT?.replace(/\\n/g, '\n');
 const connectionString = process.env.CONNECTION_STRING;
 
-if (!PORT || !apiKey || !llmModel || !systemPrompt || !connectionString) {
+if (!PORT || !apiKey || !llmModel || !connectionString) {
   throw new Error(
-    `Env is not set. PORT:${!!PORT} apiKey:${apiKey} llmModel:${!!llmModel} systemPrompt:${!!systemPrompt} connectionString:${connectionString}`
+    `Env is not set. PORT:${!!PORT} apiKey:${apiKey} llmModel:${!!llmModel} connectionString:${connectionString}`
   );
 }
+
+const upload = multer({ storage: multer.memoryStorage(), dest: 'uploads/' });
 
 let model: LanguageModelV1;
 let isGoogle = false;
@@ -35,7 +47,14 @@ if (llmModel.includes('gemini')) {
 }
 
 const generateTextWrapper = async (
-  messages: CoreMessage[],
+  messages:
+    | Array<
+        | CoreSystemMessage
+        | CoreUserMessage
+        | CoreAssistantMessage
+        | CoreToolMessage
+      >
+    | Array<UIMessage>,
   tools?: ToolSet
 ) => {
   if (isGoogle) {
@@ -72,7 +91,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.post('/chat', async (req: Request, res: Response, _next: NextFunction) => {
+app.post('/db', async (req: Request, res: Response, _next: NextFunction) => {
   const requestChatId = req.headers['x-chat-id'] as string;
   const message = req.body?.message as string;
 
@@ -86,13 +105,32 @@ app.post('/chat', async (req: Request, res: Response, _next: NextFunction) => {
     messages.push(...history.messages);
   }
 
+  const prompt = `あなたは優秀なPostgresのエンジニアです。
+ユーザーからの要望に応えられるようにツールを呼び出して回答をしてください。
+
+重要！！
+1. SQLを実行した場合は、応答にそのSQLを絶対に含めてください
+2. いきなりSQL実行ではなく、テーブルのリレーションやテーブル定義を取得してから実施してください。
+`;
+
   if (!messages.length) {
-    messages.push({ role: 'system', content: systemPrompt });
+    messages.push({ role: 'system', content: prompt });
   }
 
   messages.push({ role: 'user', content: message });
 
-  const text = await generateTextWrapper(messages);
+  const postgresMcpClient = await createMcpClient({
+    transport: {
+      type: 'sse',
+      url: 'http://localhost:8009/sse',
+    },
+  });
+
+  const posgreTools = await postgresMcpClient.tools();
+
+  const text = await generateTextWrapper(messages, posgreTools);
+
+  //   console.log('text.response');
 
   const responseMessages = text.response.messages.map((msg) => ({
     role: msg.role,
@@ -104,7 +142,9 @@ app.post('/chat', async (req: Request, res: Response, _next: NextFunction) => {
     ...responseMessages,
   ]);
 
-  res.setHeader('x-chat-id', id).json({ text: text.text });
+  console.log(text.text);
+
+  res.setHeader('x-chat-id', id).json({ text: text });
 });
 
 app.post('/figma', async (req: Request, res: Response, _next: NextFunction) => {
@@ -162,6 +202,70 @@ import { Input } from './components/ui/input';
 
   res.json({ text: text.text });
 });
+
+app.post(
+  '/image',
+  upload.single('image'),
+  async (req: Request, res: Response, _next: NextFunction) => {
+    const { file } = req;
+
+    if (!file) {
+      res.status(400).send('file is not set');
+      return;
+    }
+
+    const shadcnMcpClient = await createMcpClient({
+      transport: {
+        type: 'sse',
+        url: 'http://localhost:8888/sse',
+      },
+    });
+
+    const shadcn = await shadcnMcpClient.tools();
+
+    const prompt = `あなたは優秀なReactエンジニアです。
+
+画像を元にshadcn-uiを使ってReactで画面やコンポーネントを作成してください。
+また、CSSはtailwindを使ってください。
+
+shadcn-uiの情報を取得できるツールを用意しているので、活用して進めてください。
+
+# 重要！！
+以下を順に実施してください。
+1. shadcn-uiの一覧を取得できるツールは絶対に使用してください。
+2. 1と画像を元に使用するshadcn-uiのコンポーネントの情報を取得
+4. 画面の生成を実施。なお、TypeScriptで作成してください。
+5. ** Reactの画面やコンポーネントができるまで繰り返してください！！ **
+
+### コード作成時の注意事項
+コードの中でshadcn-uiのコンポーネントを呼び出す際は以下のように使用してください。
+
+import { Button } from './components/ui/button';
+import { Input } from './components/ui/input';
+`;
+
+    const text = await generateTextWrapper(
+      [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image', image: file.buffer },
+          ],
+        },
+      ],
+      {
+        ...shadcn,
+      }
+    );
+
+    await shadcnMcpClient.close();
+
+    console.log(text.text);
+
+    res.json({ text: text.text });
+  }
+);
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
