@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2020", // 生成されるJSのターゲット
+    "module": "CommonJS", // Node.jsならCommonJS
+    "lib": ["ES2020"], // 標準ライブラリ
+    "outDir": "./dist", // 出力先
+    "rootDir": "./src", // ソースのルート
+    "strict": true, // 型チェック厳格モード
+    "esModuleInterop": true, // import/export互換
+    "forceConsistentCasingInFileNames": true, // ファイル名の大文字小文字を厳密化
+    "skipLibCheck": true, // node_modulesの型チェック省略で高速化
+    "resolveJsonModule": true, // json import対応
+    "moduleResolution": "node", // モジュール解決
+    "noImplicitAny": true, // anyの暗黙利用を禁止
+    "noFallthroughCasesInSwitch": true // switchのフォールスルー検出
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "src/**/notDoneYet_figma/*"]
+}
